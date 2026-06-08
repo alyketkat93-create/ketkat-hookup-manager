@@ -8,12 +8,15 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 
 # =========================================================
-# KETKAT Streamlit MVP V3
-# Light UI + Logo + Export Center + BOQ to Rate Analysis
+# KETKAT Streamlit V4
+# Internal Database Version
+# Users do NOT upload the database.
+# App reads data/boq_data.xlsx from GitHub repository.
 # =========================================================
 
 APP_TITLE = "KETKAT Hook-up & Installation Manager"
 DEFAULT_SHEET_NAME = "BOQ_Data"
+DEFAULT_DATABASE_PATH = "data/boq_data.xlsx"
 LOGO_PATH = "assets/ketkat_logo.png"
 
 REQUIRED_COLUMNS = [
@@ -53,6 +56,7 @@ st.markdown(
         --ketkat-muted: #64748B;
         --ketkat-text: #0F172A;
         --ketkat-success: #16A34A;
+        --ketkat-danger: #DC2626;
     }
 
     .stApp {
@@ -186,6 +190,26 @@ st.markdown(
         color: #64748B;
     }
 
+    .db-status {
+        background: #ECFDF5;
+        border: 1px solid #BBF7D0;
+        color: #166534;
+        padding: 13px 15px;
+        border-radius: 12px;
+        font-weight: 800;
+        margin-bottom: 12px;
+    }
+
+    .db-error {
+        background: #FEF2F2;
+        border: 1px solid #FECACA;
+        color: #991B1B;
+        padding: 13px 15px;
+        border-radius: 12px;
+        font-weight: 800;
+        margin-bottom: 12px;
+    }
+
     div[data-testid="stDataFrame"],
     div[data-testid="stDataEditor"] {
         border-radius: 16px;
@@ -258,11 +282,22 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def read_excel_file(uploaded_file) -> pd.DataFrame:
-    excel = pd.ExcelFile(uploaded_file)
+@st.cache_data(show_spinner=False)
+def load_internal_database() -> tuple[pd.DataFrame, str]:
+    """
+    Loads the internal Excel database from data/boq_data.xlsx.
+    This file should be committed to the GitHub repository.
+    """
+    if not os.path.exists(DEFAULT_DATABASE_PATH):
+        raise FileNotFoundError(
+            f"Internal database file was not found at: {DEFAULT_DATABASE_PATH}. "
+            "Please upload your Excel database to GitHub in this exact path."
+        )
+
+    excel = pd.ExcelFile(DEFAULT_DATABASE_PATH)
     sheet_name = DEFAULT_SHEET_NAME if DEFAULT_SHEET_NAME in excel.sheet_names else excel.sheet_names[0]
-    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
-    return normalize_df(df)
+    df = pd.read_excel(DEFAULT_DATABASE_PATH, sheet_name=sheet_name)
+    return normalize_df(df), sheet_name
 
 
 def unique_options(series: pd.Series) -> list[str]:
@@ -303,48 +338,12 @@ def info_box(title: str, text: str):
     )
 
 
-def excel_format_common(ws, export_df, project_info, selection_text, title="KETKAT Hook-up & Installation Manager"):
-    ws["A1"] = title
-    ws["A2"] = project_info.get("project_name", "Project BOQ")
-    ws["A3"] = f"Selection: {selection_text}"
-    ws["A4"] = (
-        f"Client: {project_info.get('client', '')} | "
-        f"Consultant: {project_info.get('consultant', '')} | "
-        f"Prepared By: {project_info.get('prepared_by', '')} | "
-        f"Date: {datetime.now().strftime('%Y-%m-%d')}"
-    )
+def db_status(text: str):
+    st.markdown(f'<div class="db-status">{text}</div>', unsafe_allow_html=True)
 
-    fill_dark = PatternFill("solid", fgColor="0B172B")
-    fill_gold = PatternFill("solid", fgColor="D9A514")
-    thin = Side(style="thin", color="D9E2EC")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    for cell in ["A1", "A2", "A3", "A4"]:
-        ws[cell].fill = fill_dark
-        ws[cell].font = Font(color="FFFFFF", bold=True)
-
-    ws["A1"].font = Font(color="FFFFFF", bold=True, size=16)
-    ws["A2"].font = Font(color="FFFFFF", bold=True, size=12)
-
-    header_row = 6
-    for cell in ws[header_row]:
-        cell.fill = fill_gold
-        cell.font = Font(color="000000", bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = border
-
-    last_row = header_row + len(export_df)
-    if last_row >= header_row + 1:
-        for row in ws.iter_rows(min_row=header_row + 1, max_row=last_row, min_col=1, max_col=len(export_df.columns)):
-            for cell in row:
-                cell.border = border
-                cell.alignment = Alignment(vertical="center")
-                if cell.column in [1, 3, 4]:
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-                if cell.column in [5, 6]:
-                    cell.alignment = Alignment(horizontal="right", vertical="center")
-
-    ws.freeze_panes = "A7"
+def db_error(text: str):
+    st.markdown(f'<div class="db-error">{text}</div>', unsafe_allow_html=True)
 
 
 def build_boq_export_excel(export_df: pd.DataFrame, project_info: dict, selection_text: str) -> bytes:
@@ -353,15 +352,50 @@ def build_boq_export_excel(export_df: pd.DataFrame, project_info: dict, selectio
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         export_df.to_excel(writer, index=False, startrow=5, sheet_name="BOQ")
         ws = writer.sheets["BOQ"]
-        excel_format_common(ws, export_df, project_info, selection_text)
+
+        ws["A1"] = "KETKAT Hook-up & Installation Manager"
+        ws["A2"] = project_info.get("project_name", "Project BOQ")
+        ws["A3"] = f"Selection: {selection_text}"
+        ws["A4"] = (
+            f"Client: {project_info.get('client', '')} | "
+            f"Consultant: {project_info.get('consultant', '')} | "
+            f"Prepared By: {project_info.get('prepared_by', '')} | "
+            f"Date: {datetime.now().strftime('%Y-%m-%d')}"
+        )
+
+        fill_dark = PatternFill("solid", fgColor="0B172B")
+        fill_gold = PatternFill("solid", fgColor="D9A514")
+        thin = Side(style="thin", color="D9E2EC")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for cell in ["A1", "A2", "A3", "A4"]:
+            ws[cell].fill = fill_dark
+            ws[cell].font = Font(color="FFFFFF", bold=True)
+
+        ws["A1"].font = Font(color="FFFFFF", bold=True, size=16)
+        ws["A2"].font = Font(color="FFFFFF", bold=True, size=12)
+
+        header_row = 6
+        for cell in ws[header_row]:
+            cell.fill = fill_gold
+            cell.font = Font(color="000000", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+
+        last_row = header_row + len(export_df)
+        if last_row >= header_row + 1:
+            for row in ws.iter_rows(min_row=header_row + 1, max_row=last_row, min_col=1, max_col=len(export_df.columns)):
+                for cell in row:
+                    cell.border = border
+                    cell.alignment = Alignment(vertical="center")
+                    if cell.column in [1, 3, 4]:
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    if cell.column in [5, 6]:
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
 
         total_row = 6 + len(export_df) + 2
         ws[f"E{total_row}"] = "Total"
         ws[f"F{total_row}"] = float(export_df["T/P (SAR)"].sum()) if not export_df.empty else 0
-
-        fill_dark = PatternFill("solid", fgColor="0B172B")
-        thin = Side(style="thin", color="D9E2EC")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
         for cell in [ws[f"E{total_row}"], ws[f"F{total_row}"]]:
             cell.fill = fill_dark
@@ -373,10 +407,12 @@ def build_boq_export_excel(export_df: pd.DataFrame, project_info: dict, selectio
         for col, width in widths.items():
             ws.column_dimensions[col].width = width
 
+        ws.freeze_panes = "A7"
+
     return output.getvalue()
 
 
-def build_database_summary_excel(df: pd.DataFrame, project_info: dict) -> bytes:
+def build_database_summary_excel(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
 
     summary = (
@@ -391,7 +427,6 @@ def build_database_summary_excel(df: pd.DataFrame, project_info: dict) -> bytes:
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         summary.to_excel(writer, index=False, sheet_name="Database Summary")
-        df.drop(columns=["_row_id"], errors="ignore").to_excel(writer, index=False, sheet_name="Full Database")
 
         for sheet in writer.sheets.values():
             for col in sheet.columns:
@@ -489,12 +524,6 @@ def build_filtered_work_df(df: pd.DataFrame, main: str, sub: str, family: str, w
 # =========================================================
 # Session State
 # =========================================================
-if "database_df" not in st.session_state:
-    st.session_state.database_df = pd.DataFrame()
-
-if "loaded_filename" not in st.session_state:
-    st.session_state.loaded_filename = ""
-
 if "project_info" not in st.session_state:
     st.session_state.project_info = {
         "project_name": "Demo Project",
@@ -520,6 +549,18 @@ if "rate_item" not in st.session_state:
 
 
 # =========================================================
+# Load Internal Database
+# =========================================================
+try:
+    database_df, active_sheet_name = load_internal_database()
+    database_error_message = ""
+except Exception as exc:
+    database_df = pd.DataFrame()
+    active_sheet_name = ""
+    database_error_message = str(exc)
+
+
+# =========================================================
 # Sidebar
 # =========================================================
 with st.sidebar:
@@ -531,42 +572,27 @@ with st.sidebar:
 
     page = st.radio(
         "Navigation",
-        ["BOQ Builder", "Rate Analysis", "Project Info", "Database Preview", "Export Center"],
+        ["BOQ Builder", "Rate Analysis", "Project Info", "Database Preview", "Export Center", "Admin Guide"],
         index=0,
     )
 
     st.divider()
 
-    uploaded_logo = st.file_uploader("Upload Logo Optional", type=["png", "jpg", "jpeg"], key="logo_uploader")
-    if uploaded_logo:
-        st.image(uploaded_logo, width=120)
-        st.caption("Logo preview only. To make it permanent, save it as assets/ketkat_logo.png.")
-
-    uploaded_file = st.file_uploader(
-        "Upload BOQ Database",
-        type=["xlsx", "xls"],
-        help="Required columns: Main Category, Sub System, Family, Work Type, Title, No, Description, Unit, Default Qty, Unit Price",
-        key="db_uploader",
-    )
-
-    if uploaded_file:
-        try:
-            st.session_state.database_df = read_excel_file(uploaded_file)
-            st.session_state.loaded_filename = uploaded_file.name
-            st.success(f"Loaded: {uploaded_file.name}")
-        except Exception as exc:
-            st.error(f"Failed to load database: {exc}")
-
-    st.divider()
-
-    if not st.session_state.database_df.empty:
-        st.caption(f"Database file: {st.session_state.loaded_filename}")
-        st.caption(f"Rows: {len(st.session_state.database_df):,}")
+    st.markdown("### Internal Database")
+    if database_error_message:
+        st.error("Database not loaded")
     else:
-        st.warning("No database loaded yet.")
+        st.success("Database loaded automatically")
+        st.caption(f"Source: {DEFAULT_DATABASE_PATH}")
+        st.caption(f"Sheet: {active_sheet_name}")
+        st.caption(f"Rows: {len(database_df):,}")
+
+    if st.button("Refresh Database Cache"):
+        st.cache_data.clear()
+        st.rerun()
 
     st.divider()
-    st.caption("V3 Light MVP")
+    st.caption("V4 Internal Database")
 
 
 # =========================================================
@@ -578,8 +604,8 @@ st.markdown(
         <div class="hero-badge">MEP ESTIMATION WEB TOOL</div>
         <div class="hero-title">{APP_TITLE}</div>
         <div class="hero-subtitle">
-            Prepare Hook-up & Installation BOQ items from Excel database with smart filters,
-            editable quantities/rates, Rate Analysis linkage, and professional Excel exports.
+            Internal database version. Users can build BOQ, edit quantities/rates, run Rate Analysis,
+            and export Excel reports without uploading the main database.
         </div>
     </div>
     """,
@@ -590,10 +616,84 @@ st.markdown(
 # =========================================================
 # Pages
 # =========================================================
-df = st.session_state.database_df
+df = database_df
 
 
-if page == "Project Info":
+if database_error_message and page != "Admin Guide":
+    st.markdown('<div class="section-title">Database Setup Required</div>', unsafe_allow_html=True)
+    db_error(database_error_message)
+    info_box(
+        "How to fix",
+        "Upload your Excel database to GitHub under this exact path: data/boq_data.xlsx. "
+        "After committing the file, redeploy or reboot the Streamlit app."
+    )
+    st.stop()
+
+
+if page == "Admin Guide":
+    st.markdown('<div class="section-title">Admin Guide</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-caption">How to update the internal database and publish changes to the live website.</div>', unsafe_allow_html=True)
+
+    if database_error_message:
+        db_error(f"Current status: {database_error_message}")
+    else:
+        db_status(f"Current database is loaded from {DEFAULT_DATABASE_PATH} | Rows: {len(df):,}")
+
+    st.markdown(
+        """
+        ### How this version works
+
+        The app no longer asks users to upload the BOQ database.
+
+        Instead, it reads the Excel file directly from the GitHub repository path:
+
+        ```txt
+        data/boq_data.xlsx
+        ```
+
+        ### How to update the database
+
+        1. Edit your Excel file locally.
+        2. Keep the same required columns.
+        3. Save it as:
+
+        ```txt
+        boq_data.xlsx
+        ```
+
+        4. Upload it to GitHub in:
+
+        ```txt
+        data/boq_data.xlsx
+        ```
+
+        5. Commit changes.
+        6. Streamlit will update from GitHub. If it does not update immediately, open Manage app and click Reboot.
+
+        ### Required Excel columns
+
+        ```txt
+        Main Category
+        Sub System
+        Family
+        Work Type
+        Title
+        No
+        Description
+        Unit
+        Default Qty
+        Unit Price
+        ```
+
+        ### Security note
+
+        If your repository is Public, anyone can see the Excel database file on GitHub.
+        For real prices or private data, use a Private repository or keep only demo data in the public version.
+        """
+    )
+
+
+elif page == "Project Info":
     st.markdown('<div class="section-title">Project Information</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-caption">This information will appear in exported BOQ reports during the current session.</div>', unsafe_allow_html=True)
 
@@ -611,64 +711,58 @@ if page == "Project Info":
 
 elif page == "Database Preview":
     st.markdown('<div class="section-title">Database Preview</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-caption">Review the uploaded Excel database before building BOQ outputs.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-caption">Review the internal Excel database currently used by the website.</div>', unsafe_allow_html=True)
 
-    if df.empty:
-        info_box("No database loaded", "Upload your Excel database from the sidebar to start.")
-    else:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            card("Total Items", f"{len(df):,}", "Rows loaded", gold=True)
-        with c2:
-            card("Main Categories", f"{df['Main Category'].nunique():,}", "Unique categories")
-        with c3:
-            card("Sub Systems", f"{df['Sub System'].nunique():,}", "Unique systems")
-        with c4:
-            card("Families", f"{df['Family'].nunique():,}", "Unique families")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        card("Total Items", f"{len(df):,}", "Rows loaded", gold=True)
+    with c2:
+        card("Main Categories", f"{df['Main Category'].nunique():,}", "Unique categories")
+    with c3:
+        card("Sub Systems", f"{df['Sub System'].nunique():,}", "Unique systems")
+    with c4:
+        card("Families", f"{df['Family'].nunique():,}", "Unique families")
 
-        st.dataframe(df.drop(columns=["_row_id"], errors="ignore"), use_container_width=True, height=540)
+    st.dataframe(df.drop(columns=["_row_id"], errors="ignore"), use_container_width=True, height=540)
 
 
 elif page == "Export Center":
     st.markdown('<div class="section-title">Export Center</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-caption">Export the current BOQ selection, full database preview, or database summary.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-caption">Export current BOQ selection or database summary.</div>', unsafe_allow_html=True)
 
-    if df.empty:
-        info_box("No database loaded", "Upload your Excel database from the sidebar to enable exports.")
-    else:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            card("Database Rows", f"{len(df):,}", "Loaded rows", gold=True)
-        with c2:
-            card("Last BOQ Rows", f"{len(st.session_state.last_boq_df):,}", "Last edited BOQ table")
-        with c3:
-            total_last = float(st.session_state.last_boq_df["T/P (SAR)"].sum()) if not st.session_state.last_boq_df.empty and "T/P (SAR)" in st.session_state.last_boq_df else 0.0
-            card("Last BOQ Total", money(total_last), "From BOQ Builder")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        card("Database Rows", f"{len(df):,}", "Loaded rows", gold=True)
+    with c2:
+        card("Last BOQ Rows", f"{len(st.session_state.last_boq_df):,}", "Last edited BOQ table")
+    with c3:
+        total_last = float(st.session_state.last_boq_df["T/P (SAR)"].sum()) if not st.session_state.last_boq_df.empty and "T/P (SAR)" in st.session_state.last_boq_df else 0.0
+        card("Last BOQ Total", money(total_last), "From BOQ Builder")
 
-        summary_bytes = build_database_summary_excel(df, st.session_state.project_info)
-        st.download_button(
-            "⬇️ Export Database Summary",
-            data=summary_bytes,
-            file_name=f"KETKAT_Database_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    summary_bytes = build_database_summary_excel(df)
+    st.download_button(
+        "⬇️ Export Database Summary",
+        data=summary_bytes,
+        file_name=f"KETKAT_Database_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    if not st.session_state.last_boq_df.empty:
+        last_export_df = st.session_state.last_boq_df[["No", "Description", "Unit", "QTY", "U/R (SAR)", "T/P (SAR)"]].copy()
+        last_boq_bytes = build_boq_export_excel(
+            last_export_df,
+            st.session_state.project_info,
+            st.session_state.last_selection_text,
         )
-
-        if not st.session_state.last_boq_df.empty:
-            last_export_df = st.session_state.last_boq_df[["No", "Description", "Unit", "QTY", "U/R (SAR)", "T/P (SAR)"]].copy()
-            last_boq_bytes = build_boq_export_excel(
-                last_export_df,
-                st.session_state.project_info,
-                st.session_state.last_selection_text,
-            )
-            st.download_button(
-                "⬇️ Export Last BOQ Selection",
-                data=last_boq_bytes,
-                file_name=f"KETKAT_Last_BOQ_Export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-            )
-        else:
-            info_box("No BOQ selection yet", "Go to BOQ Builder, filter items, edit quantities/rates, then return here to export the last selection.")
+        st.download_button(
+            "⬇️ Export Last BOQ Selection",
+            data=last_boq_bytes,
+            file_name=f"KETKAT_Last_BOQ_Export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+        )
+    else:
+        info_box("No BOQ selection yet", "Go to BOQ Builder, filter items, edit quantities/rates, then return here to export the last selection.")
 
 
 elif page == "Rate Analysis":
@@ -764,17 +858,13 @@ elif page == "Rate Analysis":
 
 else:
     st.markdown('<div class="section-title">BOQ Builder</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-caption">Upload your database, filter BOQ items, edit quantities/rates, send an item to Rate Analysis, and export BOQ Excel.</div>', unsafe_allow_html=True)
-
-    if df.empty:
-        info_box("Upload database to start", "Use the file uploader in the left sidebar. The Excel file must include the required BOQ database columns.")
-        st.stop()
+    st.markdown('<div class="section-caption">Filter internal BOQ database, edit quantities/rates, send an item to Rate Analysis, and export BOQ Excel.</div>', unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        card("Database Items", f"{len(df):,}", "Total loaded rows", gold=True)
+        card("Database Items", f"{len(df):,}", "Internal database rows", gold=True)
     with c2:
-        card("Source File", st.session_state.loaded_filename or "Uploaded file", "Active database")
+        card("Database Source", "Internal", DEFAULT_DATABASE_PATH)
     with c3:
         card("Currency", "SAR", "Default pricing currency")
 
@@ -855,7 +945,7 @@ else:
 
     with action_col1:
         item_options = [
-            f"{int(row['No'])} | {row['Description'][:85]} | {row['Unit']} | SAR {float(row['U/R (SAR)']):,.2f}"
+            f"{int(row['No'])} | {str(row['Description'])[:85]} | {row['Unit']} | SAR {float(row['U/R (SAR)']):,.2f}"
             for _, row in edited_df.iterrows()
         ]
         selected_option = st.selectbox("Select item for Rate Analysis", item_options)
@@ -890,4 +980,4 @@ else:
         type="primary",
     )
 
-st.markdown('<div class="footer-note">KETKAT Hook-up & Installation Manager | Streamlit Web MVP V3</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer-note">KETKAT Hook-up & Installation Manager | Streamlit V4 Internal Database</div>', unsafe_allow_html=True)
